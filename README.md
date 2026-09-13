@@ -373,6 +373,18 @@ npm run test:watch
 The whole suite runs offline: the API test points `SOURCE_URL` at a closed local port, and the
 parser tests use the fixtures in `test/fixtures/`.
 
+On top of that, CI runs a **live parser canary** (`.github/workflows/ci.yml` → *Parser against live
+fixtures*): GitHub runners have internet egress, so every push scrapes the real board once and
+posts the result — pair, bid/ask/mid, pairs captured, which source won, which parsing layer
+handled it, the bank's “as of” date and any parser warnings — as a single PR comment that is
+updated in place, plus a run summary and a `live-scrape` artifact. That is the early-warning system
+for markup changes: when Wing redesigns the page, the canary tells you before your own tracker
+starts storing nothing.
+
+Last canary result (2026-09-13): `USD/KHR` bid **4049** / ask **4059** / mid **4054**, 17 pairs,
+via `wingbank.com.kh` with the `html-table` layer, bank “as of” 2026-09-11 — i.e. the board is
+server-rendered and the primary parsing path works against the live site.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
