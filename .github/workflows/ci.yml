@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   test:
     name: Node ${{ matrix.node }} · ${{ matrix.os }}
@@ -104,3 +108,56 @@ jobs:
           path: data/live-scrape.json
           retention-days: 7
           if-no-files-found: ignore
+
+      # Post (and keep updating) a single comment on the PR with what the parser
+      # actually pulled from the live board, so scraper regressions are visible
+      # without digging through logs or artifacts.
+      - name: Comment the live result on the PR
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            let r = {};
+            try { r = JSON.parse(fs.readFileSync('data/live-scrape.json', 'utf8') || '{}'); } catch (e) { r = { error: 'unparseable CLI output: ' + e.message }; }
+            const o = r.observation || {};
+            const p = o.primary;
+            const ok = Boolean(p && p.bid > 0 && (!p.ask || p.ask >= p.bid));
+            const lines = [
+              '<!-- live-parser-canary -->',
+              '### :satellite: Live parser canary',
+              '',
+              ok
+                ? 'Scraped from the real board at ' + new Date().toISOString() + ':'
+                : 'Could not capture a plausible quote at ' + new Date().toISOString() + ':',
+              '',
+              '| | |',
+              '| --- | --- |',
+              '| pair | ' + (ok ? '**' + p.pair + '**' : 'n/a') + ' |',
+              '| bank buy (bid) | ' + (ok ? p.bid : 'n/a') + ' |',
+              '| bank sell (ask) | ' + (ok ? p.ask : 'n/a') + ' |',
+              '| mid | ' + (ok ? p.mid : 'n/a') + ' |',
+              '| pairs captured | ' + (o.quotes ? o.quotes.length : 0) + ' |',
+              '| source that worked | ' + (o.sourceLabel ? '\`' + o.sourceLabel + '\`' : 'none') + ' |',
+              '| parsing layer | ' + (o.strategy ? '\`' + o.strategy + '\`' : 'none') + ' |',
+              '| bank as-of | ' + (o.sourceAsOf || 'not published') + ' |'
+            ];
+            if (!ok && r.error) lines.push('', 'Error: \`' + String(r.error).slice(0, 300) + '\`');
+            if (r.warnings && r.warnings.length) lines.push('', 'Warnings: ' + r.warnings.slice(0, 4).map((w) => '\`' + w + '\`').join(', '));
+            lines.push('', '<sub>Updated automatically on every push to this PR.</sub>');
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/canary-comment.md', lines.join('\n') + '\n');
+          "
+          MARKER='<!-- live-parser-canary -->'
+          BODY_FILE="$RUNNER_TEMP/canary-comment.md"
+          REPO="$GITHUB_REPOSITORY"
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate             -q ".[] | select(.body | contains("$MARKER")) | .id" | head -1 || true)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -F body=@"$BODY_FILE" --silent
+            echo "Updated existing canary comment #$EXISTING"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@"$BODY_FILE" --silent
+            echo "Posted new canary comment"
+          fi
