@@ -1,0 +1,32 @@
+{
+  "name": "wing-usd-khr-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted tracker & dashboard for the USD/KHR exchange rate published by Wing Bank Cambodia.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "scrape": "node server/cli.js",
+    "seed": "node server/cli.js --seed-only",
+    "simulate": "ALLOW_SIMULATION=true SIMULATE_ON_FAILURE=true SIMULATE_BACKFILL_DAYS=30 node server/index.js",
+    "test:watch": "node --test --watch test/*.test.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "usd",
+    "khr",
+    "cambodia",
+    "exchange-rate",
+    "wing-bank",
+    "fx",
+    "tracker"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}

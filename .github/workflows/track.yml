@@ -1,0 +1,82 @@
+name: Track USD/KHR
+
+# Serverless tracking option: GitHub's runners scrape the Wing Bank board on a
+# schedule and commit the growing dataset back to this repository. No VPS, no
+# Docker — just Actions. Point the dashboard at the repo (DATA_DIR=./data) or
+# download data/observations.jsonl to analyse it offline.
+#
+# Notes:
+#   * Scheduled workflows only run on the default branch.
+#   * GitHub may delay cron jobs by minutes (or skip them under load).
+#   * Hourly cadence adds ~2 KB/observation; prune with RETENTION_DAYS if the
+#     log grows more than you want in git.
+
+on:
+  schedule:
+    - cron: "5 * * * *" # hourly at :05
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: "Currency pair to refresh"
+        required: false
+        default: "USD/KHR"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: track-usd-khr
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # No install step: the runtime uses Node built-ins only.
+
+      - name: Scrape the board
+        id: scrape
+        env:
+          PRIMARY_PAIR: ${{ github.event.inputs.pair || 'USD/KHR' }}
+          DATA_DIR: ${{ github.workspace }}/data
+        run: |
+          mkdir -p data
+          node server/cli.js --format json | tee data/last-run.json
+          node -e "
+            const r = require('./data/last-run.json');
+            if (!r.ok) { console.error('scrape failed:', r.error); process.exit(1); }
+            const p = r.observation.primary;
+            console.log('captured', p.pair, 'bid', p.bid, 'ask', p.ask, 'mid', p.mid);
+          "
+
+      - name: Export CSV snapshot
+        env:
+          DATA_DIR: ${{ github.workspace }}/data
+        run: |
+          node server/cli.js --export > data/usd-khr.csv
+          wc -l data/observations.jsonl data/usd-khr.csv
+
+      - name: Commit dataset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "usd-khr-tracker[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # data/ is gitignored for local runs; the dataset itself is the point
+          # of this repository, so it is force-added here.
+          git add -f data/observations.jsonl data/usd-khr.csv
+          rm -f data/last-run.json
+          if git diff --cached --quiet; then
+            echo "No change in the board — nothing to commit."
+          else
+            git commit -m "data: USD/KHR board update $(date -u +'%Y-%m-%d %H:%M') UTC"
+            git push
+          fi

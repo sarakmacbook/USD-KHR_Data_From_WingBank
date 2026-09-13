@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # jsdom is only needed by the frontend smoke test; the runtime itself has
+      # zero dependencies, so the scrape job below skips installation entirely.
+      - name: Install dev dependencies
+        run: npm ci || npm install --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+  parser-fixtures:
+    name: Parser against live fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Proves the scraper still understands the real page. GitHub runners have
+      # internet egress, so this is the one place where the parser meets the live
+      # board: the result (and which source/strategy won) is written to the run
+      # summary and uploaded as an artifact instead of being lost in raw logs.
+      - name: Scrape the live board once
+        id: scrape
+        continue-on-error: true
+        run: |
+          mkdir -p data
+          node server/cli.js --format json > data/live-scrape.json || true
+          node -e "
+            const fs = require('fs');
+            const r = JSON.parse(fs.readFileSync('data/live-scrape.json', 'utf8') || '{}');
+            const o = r.observation || {};
+            const p = o.primary;
+            const summary = [];
+            const ok = Boolean(r.ok && p && p.bid > 0 && (!p.ask || p.ask >= p.bid));
+            summary.push('## Live parser canary — wingbank.com.kh');
+            summary.push('');
+            summary.push(ok ? '**Result:** :white_check_mark: board parsed and plausible' : '**Result:** :x: no plausible USD/KHR quote');
+            summary.push('');
+            summary.push('| field | value |');
+            summary.push('| --- | --- |');
+            summary.push('| pair | \`' + (p ? p.pair : 'n/a') + '\` |');
+            summary.push('| bank buy (bid) | ' + (p ? p.bid : 'n/a') + ' |');
+            summary.push('| bank sell (ask) | ' + (p ? p.ask : 'n/a') + ' |');
+            summary.push('| mid | ' + (p ? p.mid : 'n/a') + ' |');
+            summary.push('| pairs captured | ' + (o.quotes ? o.quotes.length : 0) + ' |');
+            summary.push('| source that worked | \`' + (o.sourceLabel || 'none') + '\` |');
+            summary.push('| parsing layer | \`' + (o.strategy || 'none') + '\` (format: \`' + (o.format || 'none') + '\`) |');
+            summary.push('| bank \"as of\" | ' + (o.sourceAsOf || 'not published') + ' |');
+            summary.push('');
+            if (r.attempts && r.attempts.length) {
+              summary.push('<details><summary>Source plan attempts</summary>');
+              summary.push('');
+              summary.push('| source | status | bytes | ms | pairs | error |');
+              summary.push('| --- | --- | --- | --- | --- | --- |');
+              for (const a of r.attempts) {
+                summary.push('| \`' + a.label + '\` | ' + a.status + ' | ' + a.bytes + ' | ' + a.ms + ' | ' + (a.pairs || 0) + ' | ' + (a.error || '') + ' |');
+              }
+              summary.push('');
+              summary.push('</details>');
+            }
+            if (r.warnings && r.warnings.length) {
+              summary.push('');
+              summary.push('Warnings: ' + r.warnings.map((w) => '\`' + w + '\`').join(', '));
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary.join('\n') + '\n');
+            if (!ok) { console.error('live scrape failed:', r.error || 'no primary quote'); process.exit(1); }
+            console.log('USD/KHR bid', p.bid, 'ask', p.ask, 'mid', p.mid, '| pairs:', o.quotes.length, '| via', o.sourceLabel, '/', o.strategy);
+          "
+
+      - name: Warn on the check run
+        if: steps.scrape.outcome != 'success'
+        run: echo "::warning::Live parser canary did not produce a plausible USD/KHR quote (egress, markup change, or rate limiting). See the run summary and the live-scrape artifact."
+
+      - name: Upload scrape artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-scrape
+          path: data/live-scrape.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Post (and keep updating) a single comment on the PR with what the parser
+      # actually pulled from the live board, so scraper regressions are visible
+      # without digging through logs or artifacts.
+      - name: Comment the live result on the PR
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            let r = {};
+            try { r = JSON.parse(fs.readFileSync('data/live-scrape.json', 'utf8') || '{}'); } catch (e) { r = { error: 'unparseable CLI output: ' + e.message }; }
+            const o = r.observation || {};
+            const p = o.primary;
+            const ok = Boolean(p && p.bid > 0 && (!p.ask || p.ask >= p.bid));
+            const lines = [
+              '<!-- live-parser-canary -->',
+              '### :satellite: Live parser canary',
+              '',
+              ok
+                ? 'Scraped from the real board at ' + new Date().toISOString() + ':'
+                : 'Could not capture a plausible quote at ' + new Date().toISOString() + ':',
+              '',
+              '| | |',
+              '| --- | --- |',
+              '| pair | ' + (ok ? '**' + p.pair + '**' : 'n/a') + ' |',
+              '| bank buy (bid) | ' + (ok ? p.bid : 'n/a') + ' |',
+              '| bank sell (ask) | ' + (ok ? p.ask : 'n/a') + ' |',
+              '| mid | ' + (ok ? p.mid : 'n/a') + ' |',
+              '| pairs captured | ' + (o.quotes ? o.quotes.length : 0) + ' |',
+              '| source that worked | ' + (o.sourceLabel ? '\`' + o.sourceLabel + '\`' : 'none') + ' |',
+              '| parsing layer | ' + (o.strategy ? '\`' + o.strategy + '\`' : 'none') + ' |',
+              '| bank as-of | ' + (o.sourceAsOf || 'not published') + ' |'
+            ];
+            if (!ok && r.error) lines.push('', 'Error: \`' + String(r.error).slice(0, 300) + '\`');
+            if (r.warnings && r.warnings.length) lines.push('', 'Warnings: ' + r.warnings.slice(0, 4).map((w) => '\`' + w + '\`').join(', '));
+            lines.push('', '<sub>Updated automatically on every push to this PR.</sub>');
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/canary-comment.md', lines.join('\n') + '\n');
+          "
+          MARKER='<!-- live-parser-canary -->'
+          BODY_FILE="$RUNNER_TEMP/canary-comment.md"
+          REPO="$GITHUB_REPOSITORY"
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate             -q ".[] | select(.body | contains("$MARKER")) | .id" | head -1 || true)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -F body=@"$BODY_FILE" --silent
+            echo "Updated existing canary comment #$EXISTING"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@"$BODY_FILE" --silent
+            echo "Posted new canary comment"
+          fi
