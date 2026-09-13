@@ -79,6 +79,13 @@ export const config = {
   useSeed: bool(env.USE_SEED, true),
 
   logLevel: (env.LOG_LEVEL || 'info').toLowerCase(),
+  /**
+   * Where structured logs go. stderr by default so that CLI output stays
+   * pipeable (`node server/cli.js --export > rates.csv`, `--format json | jq`)
+   * without log lines corrupting the data. Set LOG_STREAM=stdout for platforms
+   * that only collect stdout.
+   */
+  logStream: String(env.LOG_STREAM || 'stderr').toLowerCase() === 'stdout' ? 'stdout' : 'stderr',
 };
 
 export const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
@@ -91,7 +98,7 @@ export function log(level, message, meta) {
     message,
     ...(meta ? { meta } : {}),
   };
-  const out = level === 'error' || level === 'warn' ? console.error : console.log;
+  const out = config.logStream === 'stdout' ? console.log : console.error;
   out(JSON.stringify(line));
 }
 

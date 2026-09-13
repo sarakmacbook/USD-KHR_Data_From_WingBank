@@ -61,6 +61,13 @@ cd USD-KHR_Data_From_WingBank
 npm start                 # http://localhost:3000
 ```
 
+Logs are structured JSON on **stderr**, so CLI output stays clean and pipeable:
+
+```bash
+node server/cli.js --format json | jq '.observation.primary'
+node server/cli.js --export > usd-khr.csv      # dataset, no log lines mixed in
+```
+
 That is it — no `npm install` needed for the app itself. Open <http://localhost:3000>, and the
 tracker will scrape the board ~1.5 s after boot and every `POLL_INTERVAL_MIN` minutes after that.
 
@@ -203,6 +210,7 @@ Everything is environment-driven (see [`.env.example`](.env.example)). Defaults 
 | `FETCH_TIMEOUT_MS` | `20000` | per-request timeout |
 | `USER_AGENT` / `ACCEPT_LANGUAGE` | browser-like | request headers |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (structured JSON logs) |
+| `LOG_STREAM` | `stderr` | where logs go — `stderr` keeps `--export` and `--format json` pipeable; set `stdout` if your platform only collects stdout |
 | `ALLOW_SIMULATION` / `SIMULATE_ON_FAILURE` / `SIMULATE_BACKFILL_DAYS` | `false` / `false` / `0` | demo mode, see below |
 
 ## Data & storage

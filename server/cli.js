@@ -63,6 +63,13 @@ async function main() {
     return res.seeded ? 0 : 1;
   }
 
+  // Same bootstrap behaviour as the server: an empty store gets the committed
+  // snapshot so exports and dashboards are never blank before the first scrape.
+  if (store.count === 0) {
+    const seeded = await store.seedFromFile();
+    if (seeded.seeded) logger.debug('seeded empty store from snapshot', { pairs: seeded.pairs });
+  }
+
   const format = valueOf('--format', has('--json') ? 'json' : 'text');
 
   if (has('--export') || has('--csv') || format === 'csv') {
