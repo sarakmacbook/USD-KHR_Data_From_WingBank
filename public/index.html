@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>USD/KHR Tracker · Wing Bank exchange rates</title>
+  <meta name="description" content="Live-ish tracker and history for the USD/KHR exchange rate published by Wing Bank Cambodia: bank buy (bid), bank sell (ask), mid rate, charts, converter and CSV export." />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="./site.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="30" height="30" role="img" aria-label="logo">
+          <defs>
+            <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ff9a3c" />
+              <stop offset="100%" stop-color="#f0561f" />
+            </linearGradient>
+          </defs>
+          <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#bg)" />
+          <path d="M6 11h5.5l2 6.5L16 11h4l-4.3 12h-3.2L10.4 17l-2 6H5.2z" fill="#fff" opacity=".95" />
+          <path d="M20.5 22.5h5.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" />
+          <path d="M20.5 18.5h3.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" opacity=".7" />
+        </svg>
+      </span>
+      <span class="brand-text">
+        <strong>USD/KHR Tracker</strong>
+        <small>Wing Bank Cambodia · exchange rates</small>
+      </span>
+    </div>
+
+    <div class="topbar-status">
+      <span id="status-pill" class="pill pill-unknown" role="status" aria-live="polite">
+        <span class="dot"></span><span id="status-pill-text">connecting…</span>
+      </span>
+      <span class="muted" id="last-update">—</span>
+    </div>
+
+    <div class="topbar-actions">
+      <button id="btn-refresh" class="btn btn-primary" type="button" title="Scrape the source now (R)">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 5v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Refresh</span>
+      </button>
+      <a class="btn btn-ghost" id="link-source" href="https://www.wingbank.com.kh/en/exchange-rate" target="_blank" rel="noopener noreferrer">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Source</span>
+      </a>
+      <button id="btn-theme" class="btn btn-icon" type="button" title="Toggle theme (T)" aria-label="Toggle colour theme">
+        <svg class="icon icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg class="icon icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="ticker" id="ticker" aria-label="All Wing Bank currency pairs">
+    <div class="ticker-inner" id="ticker-inner">
+      <span class="muted">loading pairs…</span>
+    </div>
+  </div>
+
+  <main id="main" class="wrap">
+    <!-- HERO -->
+    <section class="panel hero" aria-labelledby="hero-title">
+      <div class="hero-main">
+        <div class="hero-head">
+          <span class="flag-chip" aria-hidden="true">$ / ៛</span>
+          <h1 id="hero-title"><span id="pair-label">USD/KHR</span> <span class="muted hero-sub" id="pair-name">Cambodian Riel</span></h1>
+        </div>
+
+        <div class="hero-rate">
+          <span id="rate-mid" class="rate-value" aria-live="polite" aria-label="Mid rate">—</span>
+          <span class="rate-unit" id="rate-unit">KHR per 1 USD</span>
+        </div>
+
+        <div class="hero-deltas" id="hero-deltas">
+          <span class="chip chip-neutral" data-window="previous">vs previous <b>—</b></span>
+          <span class="chip chip-neutral" data-window="day">24H <b>—</b></span>
+          <span class="chip chip-neutral" data-window="week">7D <b>—</b></span>
+          <span class="chip chip-neutral" data-window="month">30D <b>—</b></span>
+        </div>
+
+        <dl class="hero-meta">
+          <div><dt>Bank “as of”</dt><dd id="meta-asof">—</dd></div>
+          <div><dt>Captured</dt><dd id="meta-captured">—</dd></div>
+          <div><dt>Source</dt><dd id="meta-source">—</dd></div>
+        </dl>
+      </div>
+
+      <div class="hero-stats">
+        <article class="stat-card stat-bid">
+          <header><h2>Bank Buy <span class="tag">Bid</span></h2><small>you sell 1 USD</small></header>
+          <p class="stat-value" id="stat-bid">—</p>
+          <footer class="muted" id="stat-bid-delta">—</footer>
+        </article>
+        <article class="stat-card stat-ask">
+          <header><h2>Bank Sell <span class="tag">Ask</span></h2><small>you buy 1 USD</small></header>
+          <p class="stat-value" id="stat-ask">—</p>
+          <footer class="muted" id="stat-ask-delta">—</footer>
+        </article>
+        <article class="stat-card">
+          <header><h2>Spread</h2><small>ask − bid</small></header>
+          <p class="stat-value" id="stat-spread">—</p>
+          <footer class="muted" id="stat-spread-pct">—</footer>
+        </article>
+        <article class="stat-card">
+          <header><h2>24H range</h2><small>mid rate</small></header>
+          <p class="stat-value stat-value-sm" id="stat-range">—</p>
+          <footer class="muted" id="stat-range-count">—</footer>
+        </article>
+      </div>
+    </section>
+
+    <!-- CHART + SIDE -->
+    <div class="grid-main">
+      <section class="panel chart-panel" aria-labelledby="chart-title">
+        <header class="panel-head">
+          <div>
+            <h2 id="chart-title">Rate history</h2>
+            <p class="muted" id="chart-subtitle">mid rate · 30 days</p>
+          </div>
+          <div class="panel-controls">
+            <div class="segmented" id="range-buttons" role="group" aria-label="Chart range"></div>
+            <div class="segmented" id="field-buttons" role="group" aria-label="Plotted value">
+              <button type="button" data-field="mid" class="active">Mid</button>
+              <button type="button" data-field="bid">Bid</button>
+              <button type="button" data-field="ask">Ask</button>
+              <button type="button" data-field="spread">Spread</button>
+            </div>
+          </div>
+        </header>
+
+        <div class="chart-shell">
+          <canvas id="chart" role="img" aria-label="USD/KHR rate history chart"></canvas>
+          <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+          <div id="chart-empty" class="chart-empty" hidden>
+            <strong>No data for this range yet.</strong>
+            <p class="muted">The tracker stores a reading every poll. Widen the range, hit <b>Refresh</b>, or check the scraper health panel.</p>
+          </div>
+        </div>
+
+        <footer class="chart-footer" id="chart-footer">
+          <span><i class="legend-swatch"></i><span id="chart-legend-label">Mid</span></span>
+          <span class="muted" id="chart-points">—</span>
+          <span class="muted" id="chart-summary">—</span>
+        </footer>
+      </section>
+
+      <aside class="side">
+        <section class="panel" aria-labelledby="converter-title">
+          <header class="panel-head"><h2 id="converter-title">Converter</h2><span class="tag" id="converter-rate">—</span></header>
+          <div class="converter">
+            <label class="field">
+              <span>Amount</span>
+              <input id="convert-amount" type="number" inputmode="decimal" min="0" step="any" value="100" />
+            </label>
+            <div class="convert-dir" role="group" aria-label="Conversion direction">
+              <button type="button" id="dir-usd-khr" class="active">USD → KHR</button>
+              <button type="button" id="dir-khr-usd">KHR → USD</button>
+            </div>
+            <p class="convert-result" id="convert-result" aria-live="polite">—</p>
+            <ul class="convert-notes muted" id="convert-notes"></ul>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="alerts-title">
+          <header class="panel-head"><h2 id="alerts-title">Rate alerts</h2><span class="muted small">stored locally</span></header>
+          <div class="alerts">
+            <label class="field"><span>Notify at or above</span><input id="alert-high" type="number" inputmode="decimal" step="any" placeholder="e.g. 4100" /></label>
+            <label class="field"><span>Notify at or below</span><input id="alert-low" type="number" inputmode="decimal" step="any" placeholder="e.g. 4000" /></label>
+            <div class="alert-actions">
+              <button type="button" class="btn btn-primary" id="btn-save-alerts">Save alerts</button>
+              <button type="button" class="btn btn-ghost" id="btn-notify">Enable notifications</button>
+            </div>
+            <p class="muted small" id="alert-state">No alerts configured.</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="health-title">
+          <header class="panel-head"><h2 id="health-title">Scraper health</h2><span class="tag" id="health-next">—</span></header>
+          <dl class="kv" id="health-list"></dl>
+        </section>
+      </aside>
+    </div>
+
+    <!-- PAIRS -->
+    <section class="panel" aria-labelledby="pairs-title">
+      <header class="panel-head">
+        <div>
+          <h2 id="pairs-title">All Wing Bank pairs</h2>
+          <p class="muted small">Telegraphic transfer / outbound board captured with every poll.</p>
+        </div>
+        <div class="panel-controls">
+          <button type="button" class="btn btn-ghost" id="btn-track-pair" hidden></button>
+        </div>
+      </header>
+      <div class="table-scroll">
+        <table class="table" id="pairs-table">
+          <thead>
+            <tr><th>Pair</th><th>Currency</th><th class="num">Bid</th><th class="num">Ask</th><th class="num">Mid</th><th class="num">Spread</th><th class="num">Samples</th><th></th></tr>
+          </thead>
+          <tbody><tr><td colspan="8" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section class="panel" aria-labelledby="log-title">
+      <header class="panel-head">
+        <div>
+          <h2 id="log-title">Capture log</h2>
+          <p class="muted small">Every successful scrape, newest first.</p>
+        </div>
+        <div class="panel-controls">
+          <a class="btn btn-ghost" id="btn-csv" href="./api/export.csv" download>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Export CSV</span>
+          </a>
+        </div>
+      </header>
+      <div class="table-scroll">
+        <table class="table" id="log-table">
+          <thead>
+            <tr><th>Captured (UTC)</th><th class="num">Bid</th><th class="num">Ask</th><th class="num">Mid</th><th>Source</th><th>Strategy</th><th>Status</th></tr>
+          </thead>
+          <tbody><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+      <footer class="panel-foot">
+        <button type="button" class="btn btn-ghost" id="btn-more-log">Load older</button>
+        <span class="muted small" id="log-count">—</span>
+      </footer>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <p>
+      Rates are scraped from
+      <a href="https://www.wingbank.com.kh/en/exchange-rate" target="_blank" rel="noopener noreferrer">wingbank.com.kh/en/exchange-rate</a>
+      and are indicative only — Wing Bank publishes them without notice and the board can change between polls.
+      Always confirm with the bank before transacting.
+    </p>
+    <p class="muted small">
+      This dashboard is an independent, self-hosted tracker. It is not affiliated with, endorsed by or operated by Wing Bank.
+      <span id="foot-build"></span>
+    </p>
+  </footer>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <noscript><p class="banner banner-warn">This dashboard needs JavaScript. The JSON API is still available at <code>/api/latest</code>.</p></noscript>
+
+  <script src="./chart.js" defer></script>
+  <script src="./app.js" defer></script>
+</body>
+</html>

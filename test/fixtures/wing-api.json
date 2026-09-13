@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "asOf": "As of 11 Sep 2026",
+  "data": {
+    "telegraphicTransfer": [
+      {
+        "currencyPair": "USD/KHR",
+        "currencyName": "Cambodian Riel",
+        "bankBuy": 4049,
+        "bankSell": 4059
+      },
+      {
+        "currencyPair": "EUR/USD",
+        "currencyName": "European EURO",
+        "bankBuy": "1.1485",
+        "bankSell": "1.1717"
+      },
+      {
+        "currencyPair": "USD/THB",
+        "currencyName": "Thai Baht",
+        "bankBuy": 32.71,
+        "bankSell": 33.37
+      }
+    ],
+    "outbound": {
+      "USD/VND": { "buy": 25652, "sell": 26170 },
+      "USDKRW": 1342.79
+    }
+  }
+}

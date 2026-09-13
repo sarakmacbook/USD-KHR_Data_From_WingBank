@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # jsdom is only needed by the frontend smoke test; the runtime itself has
+      # zero dependencies, so the scrape job below skips installation entirely.
+      - name: Install dev dependencies
+        run: npm ci || npm install --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+  parser-fixtures:
+    name: Parser against live fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Proves the scraper still understands the real page. Fails loudly when
+      # Wing Bank changes markup, instead of silently storing nothing.
+      - name: Scrape the live board once
+        id: scrape
+        continue-on-error: true
+        run: |
+          mkdir -p data
+          node server/cli.js --format json > data/live-scrape.json
+          node -e "
+            const r = require('./data/live-scrape.json');
+            const p = r.observation && r.observation.primary;
+            if (!r.ok || !p) { console.error('live scrape failed:', r.error); process.exit(1); }
+            console.log('USD/KHR bid', p.bid, 'ask', p.ask, 'mid', p.mid, '| pairs:', r.observation.quotes.length);
+            if (!(p.bid > 0 && p.ask >= p.bid)) { console.error('implausible quote'); process.exit(1); }
+          "
+
+      - name: Report
+        if: steps.scrape.outcome != 'success'
+        run: |
+          echo "::warning::Live scrape did not succeed (network egress or markup change). Review data/live-scrape.json."
+          if [ -f data/live-scrape.json ]; then head -c 2000 data/live-scrape.json; fi

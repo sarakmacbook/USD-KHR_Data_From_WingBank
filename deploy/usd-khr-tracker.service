@@ -1,0 +1,53 @@
+# systemd unit for a bare-metal / VPS install.
+#
+#   sudo cp deploy/usd-khr-tracker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now usd-khr-tracker
+#   journalctl -u usd-khr-tracker -f
+#
+# Adjust User, WorkingDirectory and ExecStart to your checkout location.
+
+[Unit]
+Description=USD/KHR exchange-rate tracker (Wing Bank board)
+Documentation=https://github.com/sarakmacbook/USD-KHR_Data_From_WingBank
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tracker
+Group=tracker
+WorkingDirectory=/opt/usd-khr-tracker
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=10
+
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+Environment=DATA_DIR=/var/lib/usd-khr-tracker
+Environment=PRIMARY_PAIR=USD/KHR
+Environment=POLL_INTERVAL_MIN=15
+Environment=LOG_LEVEL=info
+
+# The tracker needs outbound HTTPS to the bank only — keep it locked down.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/usd-khr-tracker
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Resource guard rails
+MemoryMax=256M
+TasksMax=64
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=usd-khr-tracker
+
+[Install]
+WantedBy=multi-user.target

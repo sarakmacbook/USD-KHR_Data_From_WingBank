@@ -1,0 +1,53 @@
+# Reverse-proxy example: serve the tracker behind a domain with TLS.
+#
+#   sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/usd-khr-tracker
+#   sudo ln -s /etc/nginx/sites-available/usd-khr-tracker /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# TLS issuance: sudo certbot --nginx -d rates.example.com
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name rates.example.com;
+
+    # Redirect all plain HTTP traffic to HTTPS.
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name rates.example.com;
+
+    # ssl_certificate     /etc/letsencrypt/live/rates.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/rates.example.com/privkey.pem;
+
+    # Basic auth keeps a personal rate dashboard off the open internet.
+    # Create the file with:  htpasswd -c /etc/nginx/htpasswd-tracker <user>
+    # auth_basic "USD/KHR tracker";
+    # auth_basic_user_file /etc/nginx/htpasswd-tracker;
+
+    access_log /var/log/nginx/usd-khr-tracker.access.log;
+    error_log  /var/log/nginx/usd-khr-tracker.error.log warn;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 75s;
+    }
+
+    # Never let a proxy cache stale rate data.
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        add_header Cache-Control "no-store" always;
+    }
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+}
