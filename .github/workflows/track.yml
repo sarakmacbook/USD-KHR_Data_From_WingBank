@@ -95,9 +95,15 @@ jobs:
       # Vercel redeploy so the dashboard picks up the new rows. Optional: add a
       # VERCEL_DEPLOY_HOOK_URL secret (Project → Settings → Git → Deploy Hooks)
       # and every commit of the dataset refreshes the live site within a minute.
+      # NB: the `secrets` context is not available in a step-level `if`, so the
+      # guard lives in the script instead (an unset secret expands to empty).
       - name: Trigger Vercel redeploy
-        if: ${{ secrets.VERCEL_DEPLOY_HOOK_URL != '' }}
         continue-on-error: true
-        run: curl -sS -X POST "$VERCEL_DEPLOY_HOOK_URL"
         env:
           VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL is not set — skipping the redeploy."
+            exit 0
+          fi
+          curl -sS -X POST "$VERCEL_DEPLOY_HOOK_URL"
