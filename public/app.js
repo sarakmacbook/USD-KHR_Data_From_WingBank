@@ -31,6 +31,8 @@
     statRangeCount: $('stat-range-count'),
     rangeButtons: $('range-buttons'),
     fieldButtons: $('field-buttons'),
+    grainButtons: $('grain-buttons'),
+    btnDailyCsv: $('btn-daily-csv'),
     chartSubtitle: $('chart-subtitle'),
     chartCanvas: $('chart'),
     chartTooltip: $('chart-tooltip'),
@@ -78,6 +80,8 @@
     pair: 'USD/KHR',
     field: 'mid',
     range: '30d',
+    /** 'auto' buckets raw samples; 'daily' plots one snapshot per calendar day. */
+    grain: 'auto',
     direction: 'usd-khr',
     latest: null,
     history: null,
@@ -100,6 +104,7 @@
       if (raw.pair) state.pair = raw.pair;
       if (raw.field) state.field = raw.field;
       if (raw.range) state.range = raw.range;
+      if (raw.grain === 'daily' || raw.grain === 'auto') state.grain = raw.grain;
       if (raw.direction) state.direction = raw.direction;
       if (raw.theme) setTheme(raw.theme, false);
       if (raw.alerts) state.alerts = Object.assign(state.alerts, raw.alerts);
@@ -114,6 +119,7 @@
           pair: state.pair,
           field: state.field,
           range: state.range,
+          grain: state.grain,
           direction: state.direction,
           theme: document.documentElement.dataset.theme,
           alerts: state.alerts,
@@ -458,12 +464,16 @@
       ['Last strategy', s.scraper?.lastStrategy || '—'],
       ['Bank “as of”', s.scraper?.lastSourceAsOf || '—'],
       ['Observations stored', String(s.store?.observations ?? 0)],
+      s.daily
+        ? ['Daily snapshots', `${s.daily.days ?? 0} day${(s.daily.days ?? 0) === 1 ? '' : 's'}${s.daily.lastDate ? ` · last ${s.daily.lastDate}` : ''}${s.daily.tz ? ` (${s.daily.tz})` : ''}`]
+        : null,
       ['Series starts', s.store?.firstAt ? utcStamp(s.store.firstAt) : '—'],
       ['Log size', s.store?.logBytes ? `${(s.store.logBytes / 1024).toFixed(1)} KB` : '—'],
       ['Simulated rows', String(s.scraper?.totalSimulated ?? 0), (s.scraper?.totalSimulated ?? 0) > 0 ? 'warn' : 'ok'],
     ];
     if (s.scraper?.lastError) rows.push(['Last error', s.scraper.lastError, 'bad']);
     els.healthList.innerHTML = rows
+      .filter(Boolean)
       .map(([k, v, cls]) => `<dt>${k}</dt><dd class="${cls || ''}">${escapeHtml(v)}</dd>`)
       .join('');
     els.healthNext.textContent = s.scraper?.running ? 'scraping…' : s.scraper?.nextRunAt ? `next ${new Date(s.scraper.nextRunAt).toISOString().slice(11, 16)}Z` : 'idle';
@@ -511,8 +521,10 @@
     const decimals = state.latest?.quote?.decimals ?? decimalsFor(state.latest?.quote?.mid ?? 4050);
     const label = { mid: 'Mid', bid: 'Bank buy (bid)', ask: 'Bank sell (ask)', spread: 'Spread' }[state.field] || 'Mid';
     els.chartLegendLabel.textContent = label;
-    els.chartSubtitle.textContent = `${label.toLowerCase()} · ${state.pair} · ${rangeLabel(state.range)}`;
+    const grainNote = h?.grain === 'daily' ? ` · daily closes${h.tz ? ` (${h.tz})` : ''}` : '';
+    els.chartSubtitle.textContent = `${label.toLowerCase()} · ${state.pair} · ${rangeLabel(state.range)}${grainNote}`;
     els.btnCsv.href = `./api/export.csv?pair=${encodeURIComponent(state.pair)}&range=${encodeURIComponent(state.range)}`;
+    els.btnDailyCsv.href = `./api/daily?pair=${encodeURIComponent(state.pair)}&range=${encodeURIComponent(state.range)}&format=csv`;
 
     if (!h || !h.points || !h.points.length) {
       els.chartEmpty.hidden = false;
@@ -525,7 +537,10 @@
     state.chart.setData({ points: h.points, options: { decimals } });
 
     const s = h.summary || {};
-    els.chartPoints.textContent = `${h.count} plotted point${h.count === 1 ? '' : 's'}${h.bucketMs ? ` · aggregated to ${bucketLabel(h.bucketMs)}` : ` · ${h.rawCount} raw sample${h.rawCount === 1 ? '' : 's'}`}`;
+    els.chartPoints.textContent =
+      h.grain === 'daily'
+        ? `${h.count} daily snapshot${h.count === 1 ? '' : 's'} · from ${h.rawCount} sample${h.rawCount === 1 ? '' : 's'}`
+        : `${h.count} plotted point${h.count === 1 ? '' : 's'}${h.bucketMs ? ` · aggregated to ${bucketLabel(h.bucketMs)}` : ` · ${h.rawCount} raw sample${h.rawCount === 1 ? '' : 's'}`}`;
     els.chartSummary.textContent = s.count
       ? `open ${fmt(s.first, decimals)} · high ${fmt(s.max, decimals)} · low ${fmt(s.min, decimals)} · close ${fmt(s.last, decimals)} · ${fmtPct(s.changePct)}`
       : '';
@@ -595,8 +610,9 @@
   }
 
   async function loadHistory() {
+    const grain = state.grain === 'daily' ? '&grain=daily' : '';
     const { data } = await api(
-      `./api/history?pair=${encodeURIComponent(state.pair)}&field=${state.field}&range=${encodeURIComponent(state.range)}`
+      `./api/history?pair=${encodeURIComponent(state.pair)}&field=${state.field}&range=${encodeURIComponent(state.range)}${grain}`
     );
     state.history = data;
     renderChart();
@@ -679,6 +695,16 @@
       els.fieldButtons.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
       savePrefs();
       Promise.all([loadHistory(), loadLatest()]).catch((err) => toast(err.message, 'error'));
+    });
+
+    els.grainButtons.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.grain === state.grain));
+    els.grainButtons.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button[data-grain]');
+      if (!btn) return;
+      state.grain = btn.dataset.grain;
+      els.grainButtons.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+      savePrefs();
+      loadHistory().catch((err) => toast(err.message, 'error'));
     });
   }
 

@@ -39,6 +39,24 @@ export const config = {
   maxObservations: num(env.MAX_OBSERVATIONS, 500_000),
   retentionDays: num(env.RETENTION_DAYS, 0), // 0 = keep forever
   minStoreIntervalSec: num(env.MIN_STORE_INTERVAL_SEC, 30),
+  /**
+   * `auto`  — writable filesystem => read/write; serverless/read-only => read-only.
+   * `fs`    — always read/write (fails loudly if the disk is read-only).
+   * `readonly` — never write; the dataset is whatever ships with the bundle.
+   */
+  storeMode: ['auto', 'fs', 'readonly'].includes(String(env.STORE_MODE || 'auto').toLowerCase())
+    ? String(env.STORE_MODE || 'auto').toLowerCase()
+    : 'auto',
+
+  // --- Daily snapshots -------------------------------------------------------
+  /**
+   * UTC offset (minutes) used for calendar-day boundaries. 420 = UTC+7,
+   * i.e. Asia/Phnom_Penh — Cambodia has no DST, so a fixed offset is exact.
+   */
+  dailyTzOffsetMin: num(env.DAILY_TZ_OFFSET_MIN, 420),
+  /** Pairs persisted to daily.jsonl: `*` = every tracked pair, else a CSV list. */
+  dailyPairs: list(env.DAILY_SNAPSHOT_PAIRS || '').length ? list(env.DAILY_SNAPSHOT_PAIRS) : null,
+  dailyRetentionDays: num(env.DAILY_RETENTION_DAYS, 0), // 0 = keep forever
 
   // --- Source ----------------------------------------------------------------
   sourceUrl: env.SOURCE_URL || 'https://www.wingbank.com.kh/en/exchange-rate',
@@ -77,6 +95,24 @@ export const config = {
   // --- Seed snapshot ---------------------------------------------------------
   seedFile: env.SEED_FILE || path.join(ROOT_DIR, 'server', 'seed-snapshot.json'),
   useSeed: bool(env.USE_SEED, true),
+
+  // --- Serverless deployment (Vercel) ----------------------------------------
+  /**
+   * Vercel Cron authenticates with `Authorization: Bearer $CRON_SECRET`.
+   * Without it the cron route answers only to requests whose User-Agent is
+   * `vercel-cron`, and any other caller gets a 401.
+   */
+  cronSecret: env.CRON_SECRET || '',
+  /** Where the serverless cron commits its dataset files (see gitstore.js). */
+  git: {
+    token: env.GITHUB_DATA_TOKEN || '',
+    repo: env.GITHUB_REPO || '',
+    branch: env.GITHUB_BRANCH || 'main',
+    apiUrl: env.GITHUB_API_URL || 'https://api.github.com',
+  },
+  /** Files the serverless snapshot job maintains in git. */
+  dailyFile: env.DAILY_FILE || 'data/daily.jsonl',
+  dailyCsvFile: env.DAILY_CSV_FILE || 'data/usd-khr-daily.csv',
 
   logLevel: (env.LOG_LEVEL || 'info').toLowerCase(),
   /**

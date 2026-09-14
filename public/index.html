@@ -135,6 +135,11 @@
               <button type="button" data-field="ask">Ask</button>
               <button type="button" data-field="spread">Spread</button>
             </div>
+            <div class="segmented" id="grain-buttons" role="group" aria-label="Chart resolution"
+                 title="Auto buckets raw samples; Daily plots one snapshot per calendar day (UTC+7)">
+              <button type="button" data-grain="auto" class="active">Auto</button>
+              <button type="button" data-grain="daily">Daily</button>
+            </div>
           </div>
         </header>
 
@@ -151,6 +156,11 @@
           <span><i class="legend-swatch"></i><span id="chart-legend-label">Mid</span></span>
           <span class="muted" id="chart-points">—</span>
           <span class="muted" id="chart-summary">—</span>
+          <a class="btn btn-ghost btn-sm" id="btn-daily-csv" href="./api/daily?format=csv" download
+             title="Daily snapshot prices: one open/high/low/close row per day">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Daily CSV</span>
+          </a>
         </footer>
       </section>
 

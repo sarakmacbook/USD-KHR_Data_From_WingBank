@@ -124,6 +124,30 @@ function historyPayload() {
   };
 }
 
+/** What /api/history returns when the chart is switched to daily snapshots. */
+function dailyHistoryPayload() {
+  const now = Date.now();
+  const points = [0, 1, 2].map((i) => ({
+    t: now - (2 - i) * 86_400_000,
+    date: new Date(now - (2 - i) * 86_400_000).toISOString().slice(0, 10),
+    v: 4050 + i * 2,
+    open: 4049 + i,
+    min: 4044 + i,
+    max: 4058 + i,
+    count: 96,
+    sim: false,
+  }));
+  return Object.assign(historyPayload(), {
+    grain: 'daily',
+    tz: '+07:00',
+    bucketMs: 86_400_000,
+    count: points.length,
+    rawCount: 288,
+    points,
+    summary: { count: 3, first: 4050, last: 4054, min: 4044, max: 4060, avg: 4052, change: 4, changePct: 0.099 },
+  });
+}
+
 function pairsPayload() {
   return {
     ok: true,
@@ -200,6 +224,7 @@ async function mount(t, { simulated = false } = {}) {
       const routes = {
         latest: latestPayload({ simulated }),
         history: historyPayload(),
+        historyDaily: dailyHistoryPayload(),
         pairs: pairsPayload(),
         observations: observationsPayload(),
         refresh: { ok: true, simulated, primary: { pair: 'USD/KHR', bid: 4049, ask: 4059, mid: 4054 }, attempts: [], warnings: [] },
@@ -210,9 +235,11 @@ async function mount(t, { simulated = false } = {}) {
         window.__fetchLog.push({ url: u, method: options?.method || 'GET' });
         const key = u.includes('/api/latest')
           ? 'latest'
-          : u.includes('/api/history')
-            ? 'history'
-            : u.includes('/api/pairs')
+          : u.includes('/api/history') && u.includes('grain=daily')
+            ? 'historyDaily'
+            : u.includes('/api/history')
+              ? 'history'
+              : u.includes('/api/pairs')
               ? 'pairs'
               : u.includes('/api/observations')
                 ? 'observations'
@@ -364,4 +391,35 @@ test('manual refresh posts to the API', { skip: JSDOM ? false : 'jsdom not insta
   document.getElementById('btn-refresh').click();
   await new Promise((r) => window.setTimeout(r, 40));
   assert.ok(window.__fetchLog.some((f) => f.url.includes('/api/refresh') && f.method === 'POST'));
+});
+
+test('the Daily toggle re-requests the chart at daily resolution', { skip: JSDOM ? false : 'jsdom not installed', timeout: 30_000 }, async (t) => {
+  const { window, document } = await mount(t);
+  const btn = document.querySelector('#grain-buttons button[data-grain="daily"]');
+  assert.ok(btn, 'the Auto/Daily resolution toggle is rendered');
+  assert.equal(document.querySelector('#grain-buttons button[data-grain="auto"]').className, 'active');
+
+  btn.click();
+  for (let i = 0; i < 8; i += 1) await new Promise((r) => window.setTimeout(r, 12));
+
+  const calls = window.__fetchLog.filter((f) => f.url.includes('/api/history'));
+  assert.match(calls.at(-1).url, /grain=daily/, 'the chart asks for daily snapshots');
+  assert.match(document.getElementById('chart-subtitle').textContent, /daily closes \(\+07:00\)/);
+  assert.match(document.getElementById('chart-points').textContent, /3 daily snapshots · from 288 samples/);
+  assert.match(document.getElementById('btn-daily-csv').getAttribute('href'), /^\.\/api\/daily\?pair=USD%2FKHR&range=30d&format=csv$/);
+  assert.equal(btn.className, 'active', 'the toggle reflects the new resolution');
+  assert.deepEqual(window.__errors, [], 'no runtime errors while switching');
+
+  // switching back drops the parameter again
+  document.querySelector('#grain-buttons button[data-grain="auto"]').click();
+  for (let i = 0; i < 8; i += 1) await new Promise((r) => window.setTimeout(r, 12));
+  assert.doesNotMatch(window.__fetchLog.filter((f) => f.url.includes('/api/history')).at(-1).url, /grain=daily/);
+});
+
+test('the daily CSV link follows the tracked pair', { skip: JSDOM ? false : 'jsdom not installed', timeout: 30_000 }, async (t) => {
+  const { window, document } = await mount(t);
+  document.querySelector('#ticker-inner button[data-pair="USD/THB"]').click();
+  for (let i = 0; i < 8; i += 1) await new Promise((r) => window.setTimeout(r, 12));
+  assert.match(document.getElementById('btn-daily-csv').getAttribute('href'), /pair=USD%2FTHB/);
+  assert.match(document.getElementById('btn-csv').getAttribute('href'), /pair=USD%2FTHB/);
 });

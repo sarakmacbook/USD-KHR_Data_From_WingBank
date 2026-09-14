@@ -148,6 +148,52 @@ test('GET /api/export.csv downloads the series', async () => {
   assert.match(lines[1], /USD\/KHR,4049,4059,4054,10,2026-09-11,false$/);
 });
 
+test('GET /api/daily returns one snapshot row per calendar day', async () => {
+  const r = await get('/api/daily?pair=USD/KHR');
+  assert.equal(r.status, 200);
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.pair, 'USD/KHR');
+  assert.equal(r.json.tz, '+07:00');
+  assert.equal(r.json.count, 1, 'the seed snapshot covers a single day');
+  const day = r.json.days[0];
+  assert.match(day.date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(day.open, 4054);
+  assert.equal(day.high, 4054);
+  assert.equal(day.low, 4054);
+  assert.equal(day.close, 4054);
+  assert.equal(day.bid.close, 4049);
+  assert.equal(day.ask.close, 4059);
+  assert.equal(day.spreadClose, 10);
+  assert.equal(day.samples, 1);
+  assert.equal(day.simulated, false);
+  assert.equal(r.json.points[0].v, 4054, 'chart-ready points ride along');
+  assert.equal(r.json.summary.count, 1);
+
+  const csv = await get('/api/daily?format=csv');
+  assert.match(csv.headers.get('content-type'), /text\/csv/);
+  assert.match(csv.headers.get('content-disposition'), /USD-KHR-daily-all-\d{4}-\d{2}-\d{2}\.csv/);
+  const lines = csv.text.trim().split('\n');
+  assert.match(lines[0], /^date,pair,tz,open,high,low,close,/);
+  assert.equal(lines.length, 2);
+});
+
+test('GET /api/history?grain=daily switches the chart to daily closes', async () => {
+  const r = await get('/api/history?range=all&field=mid&grain=daily');
+  assert.equal(r.json.grain, 'daily');
+  assert.equal(r.json.bucketMs, 86_400_000);
+  assert.equal(r.json.count, 1);
+  assert.equal(r.json.points[0].v, 4054);
+  assert.equal(r.json.points[0].date, r.json.points[0].date);
+  assert.ok(r.json.tz, 'the response names the timezone the days are cut on');
+
+  const bid = await get('/api/history?range=all&field=bid&grain=daily');
+  assert.equal(bid.json.points[0].v, 4049, 'daily bid close');
+
+  const auto = await get('/api/history?range=all&field=mid');
+  assert.equal(auto.json.grain, 'sample');
+  assert.equal(auto.json.bucketMs, 0, 'one point needs no bucketing');
+});
+
 test('GET /api/status describes scraper health', async () => {
   const r = await get('/api/status');
   assert.equal(r.json.ok, true);
@@ -155,6 +201,10 @@ test('GET /api/status describes scraper health', async () => {
   assert.equal(r.json.pollIntervalMin, 1440);
   assert.equal(r.json.simulation.allowed, false);
   assert.equal(r.json.store.observations, 1);
+  assert.equal(r.json.daily.tz, '+07:00');
+  assert.equal(r.json.daily.days, 1, 'daily snapshot coverage is reported');
+  assert.match(r.json.daily.lastDate, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(r.json.daily.lastClose, 4054);
   assert.equal(typeof r.json.scraper.totalAttempts, 'number');
   assert.ok(r.json.serverTime);
 });

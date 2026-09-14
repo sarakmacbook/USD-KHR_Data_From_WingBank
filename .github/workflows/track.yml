@@ -64,6 +64,17 @@ jobs:
           node server/cli.js --export > data/usd-khr.csv
           wc -l data/observations.jsonl data/usd-khr.csv
 
+      # One open/high/low/close row per calendar day (UTC+7) — the compact series
+      # long-range graphs and spreadsheets want. Written straight into data/ so a
+      # Vercel deployment ships it with the bundle.
+      - name: Write daily snapshot files
+        env:
+          DATA_DIR: ${{ github.workspace }}/data
+        run: |
+          node server/cli.js --daily --format jsonl > data/daily.jsonl
+          node server/cli.js --daily --format csv > data/usd-khr-daily.csv
+          wc -l data/daily.jsonl data/usd-khr-daily.csv
+
       - name: Commit dataset
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,7 +83,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # data/ is gitignored for local runs; the dataset itself is the point
           # of this repository, so it is force-added here.
-          git add -f data/observations.jsonl data/usd-khr.csv
+          git add -f data/observations.jsonl data/usd-khr.csv data/daily.jsonl data/usd-khr-daily.csv
           rm -f data/last-run.json
           if git diff --cached --quiet; then
             echo "No change in the board — nothing to commit."
@@ -80,3 +91,13 @@ jobs:
             git commit -m "data: USD/KHR board update $(date -u +'%Y-%m-%d %H:%M') UTC"
             git push
           fi
+
+      # Vercel redeploy so the dashboard picks up the new rows. Optional: add a
+      # VERCEL_DEPLOY_HOOK_URL secret (Project → Settings → Git → Deploy Hooks)
+      # and every commit of the dataset refreshes the live site within a minute.
+      - name: Trigger Vercel redeploy
+        if: ${{ secrets.VERCEL_DEPLOY_HOOK_URL != '' }}
+        continue-on-error: true
+        run: curl -sS -X POST "$VERCEL_DEPLOY_HOOK_URL"
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
