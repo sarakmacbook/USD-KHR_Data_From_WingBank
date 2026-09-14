@@ -17,23 +17,37 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 import { config, logger } from './config.js';
+import { dailyCsv, dailySnapshots, mergeDailyRows, DEFAULT_TZ_OFFSET_MIN } from './daily.js';
 
 const TAIL_KEEP = 1000; // full observations kept in memory for the table view
 
 export class Store {
-  constructor({ dataDir = config.dataDir, maxObservations = config.maxObservations, retentionDays = config.retentionDays, minStoreIntervalSec = config.minStoreIntervalSec } = {}) {
+  constructor({
+    dataDir = config.dataDir,
+    maxObservations = config.maxObservations,
+    retentionDays = config.retentionDays,
+    minStoreIntervalSec = config.minStoreIntervalSec,
+    dailyTzOffsetMin = config.dailyTzOffsetMin,
+    readonly = false,
+  } = {}) {
     this.dataDir = dataDir;
     this.logFile = path.join(dataDir, 'observations.jsonl');
     this.latestFile = path.join(dataDir, 'latest.json');
     this.metaFile = path.join(dataDir, 'meta.json');
+    this.dailyFile = path.join(dataDir, 'daily.jsonl');
     this.maxObservations = maxObservations;
     this.retentionDays = retentionDays;
     this.minStoreIntervalSec = minStoreIntervalSec;
+    this.dailyTzOffsetMin = dailyTzOffsetMin ?? DEFAULT_TZ_OFFSET_MIN;
+    /** Read-only stores (serverless) index in memory but never touch the disk. */
+    this.readonly = Boolean(readonly);
 
     /** @type {Map<string, Array<{t:number,bid:number|null,ask:number|null,mid:number|null,sim:boolean,name:string}>>} */
     this.points = new Map();
     /** @type {Array<object>} */
     this.tail = [];
+    /** @type {Map<string, object>} `${pair}|${date}` -> daily snapshot row */
+    this.daily = new Map();
     this.count = 0;
     this.firstAt = null;
     this.lastAt = null;
@@ -51,18 +65,32 @@ export class Store {
       lastSource: null,
       lastStrategy: null,
       lastSourceAsOf: null,
+      lastDailySnapshot: null,
     };
     this._writeChain = Promise.resolve();
   }
 
   async init() {
-    await fsp.mkdir(this.dataDir, { recursive: true });
+    if (!this.readonly) {
+      try {
+        await fsp.mkdir(this.dataDir, { recursive: true });
+      } catch (err) {
+        logger.warn('data dir is not writable — switching to read-only store', {
+          dataDir: this.dataDir,
+          error: err.message,
+        });
+        this.readonly = true;
+      }
+    }
     await this._loadMeta();
     await this._loadLog();
+    await this._loadDaily();
     logger.info('store ready', {
       dataDir: this.dataDir,
       observations: this.count,
       pairs: this.points.size,
+      dailySnapshots: this.daily.size,
+      readonly: this.readonly,
       firstAt: this.firstAt,
       lastAt: this.lastAt,
     });
@@ -95,6 +123,53 @@ export class Store {
     }
     if (bad) logger.warn('skipped malformed observation lines', { count: bad });
     this._sortIndex();
+  }
+
+  /**
+   * Load persisted daily snapshots (`data/daily.jsonl`, one row per day/pair).
+   * On a serverless host this file — not the observation log — is what makes a
+   * multi-month graph possible.
+   */
+  async _loadDaily() {
+    let raw = '';
+    try {
+      raw = await fsp.readFile(this.dailyFile, 'utf8');
+    } catch {
+      return; // optional file
+    }
+    let bad = 0;
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (!row?.date) continue;
+        this.daily.set(`${row.pair || ''}|${row.date}`, row);
+      } catch {
+        bad += 1;
+      }
+    }
+    if (bad) logger.warn('skipped malformed daily snapshot lines', { count: bad });
+  }
+
+  /**
+   * Index observations without writing anything (serverless cold start, or a
+   * caller that already persisted the rows elsewhere).
+   */
+  hydrate(observations) {
+    if (!Array.isArray(observations) || !observations.length) return { observations: 0 };
+    for (const obs of observations) this._index(obs);
+    this._sortIndex();
+    return { observations: observations.length };
+  }
+
+  /** Index daily snapshot rows in memory (used by the serverless bootstrap). */
+  hydrateDaily(rows) {
+    if (!Array.isArray(rows) || !rows.length) return { rows: 0 };
+    for (const row of rows) {
+      if (!row?.date) continue;
+      this.daily.set(`${row.pair || ''}|${row.date}`, row);
+    }
+    return { rows: rows.length };
   }
 
   /**
@@ -168,6 +243,17 @@ export class Store {
         return { stored: false, reason: 'unchanged within min store interval' };
       }
 
+      if (this.readonly) {
+        // Serverless: the filesystem is read-only, so the reading is kept in
+        // memory for the rest of this instance's life and reported as unpersisted.
+        this._index(obs);
+        this.meta.lastSuccessAt = obs.capturedAt;
+        this.meta.lastSource = obs.sourceUrl;
+        this.meta.lastStrategy = obs.strategy;
+        this.meta.lastSourceAsOf = obs.sourceAsOf;
+        return { stored: false, reason: 'read-only store (serverless filesystem)' };
+      }
+
       await fsp.appendFile(this.logFile, `${JSON.stringify(obs)}\n`, 'utf8');
       this._index(obs);
       await this._writeJson(this.latestFile, obs);
@@ -193,6 +279,7 @@ export class Store {
    */
   async bulkAppend(observations) {
     if (!Array.isArray(observations) || !observations.length) return { stored: 0 };
+    if (this.readonly) return { stored: 0, reason: 'read-only store (serverless filesystem)' };
     return this._enqueue(async () => {
       const payload = observations.map((o) => `${JSON.stringify(o)}`).join('\n') + '\n';
       await fsp.appendFile(this.logFile, payload, 'utf8');
@@ -233,6 +320,7 @@ export class Store {
   }
 
   async _writeJson(file, value) {
+    if (this.readonly) return;
     const tmp = `${file}.tmp`;
     await fsp.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     await fsp.rename(tmp, file);
@@ -240,6 +328,7 @@ export class Store {
 
   /** Rewrite the log when it grows past the configured bounds. */
   async _maybePrune() {
+    if (this.readonly) return;
     const tooMany = this.maxObservations > 0 && this.count > this.maxObservations;
     const cutoff = this.retentionDays > 0 ? Date.now() - this.retentionDays * 86_400_000 : 0;
     const tooOld = cutoff > 0 && this.firstAt && this.firstAt < cutoff;
@@ -338,7 +427,94 @@ export class Store {
       firstAt: this.firstAt ? new Date(this.firstAt).toISOString() : null,
       lastAt: this.lastAt ? new Date(this.lastAt).toISOString() : null,
       logBytes: fs.existsSync(this.logFile) ? fs.statSync(this.logFile).size : 0,
+      dailySnapshots: this.daily.size,
+      dailyTz: this.dailyTzOffsetMin,
+      readonly: this.readonly,
     };
+  }
+
+  // --- daily snapshots -------------------------------------------------------
+
+  /**
+   * Daily snapshot rows for a pair: persisted rows (which survive log pruning
+   * and are all a serverless host has) merged with rows recomputed from the
+   * observation log. Recomputed rows win for the days they cover because they
+   * are derived from the full-resolution samples.
+   */
+  dailyRows({ pair = config.primaryPair, since = 0, until = Infinity } = {}) {
+    const persisted = [];
+    for (const row of this.daily.values()) {
+      if (row.pair !== pair) continue;
+      const t = Date.parse(row.lastAt || 0);
+      if (Number.isFinite(t) && (t < since || t > until)) continue;
+      persisted.push(row);
+    }
+    const derived = dailySnapshots(this.series({ pair, since, until }), {
+      pair,
+      offsetMin: this.dailyTzOffsetMin,
+    });
+    return mergeDailyRows(persisted, derived);
+  }
+
+  /** Daily snapshot rows as CSV. */
+  dailyCsv({ pair = config.primaryPair, since = 0, until = Infinity } = {}) {
+    return dailyCsv(this.dailyRows({ pair, since, until }));
+  }
+
+  /**
+   * Recompute the most recent daily snapshots from the observation log and keep
+   * `data/daily.jsonl` in sync (rewritten only when the content actually
+   * changed). Returns the rows for the affected days.
+   */
+  async updateDailySnapshots({ pairs = null, days = 2, now = Date.now() } = {}) {
+    const targets = (pairs || this.dailyPairs()).filter((p) => this.points.has(p));
+    if (!targets.length) return { updated: [], written: false };
+
+    const sinceMs = now - days * 86_400_000 - 6 * 60 * 60_000; // overlap the tz boundary
+    const touched = [];
+    for (const pair of targets) {
+      for (const row of dailySnapshots(this.series({ pair, since: sinceMs }), {
+        pair,
+        offsetMin: this.dailyTzOffsetMin,
+      })) {
+        this.daily.set(`${pair}|${row.date}`, row);
+        touched.push(row);
+      }
+    }
+    if (!touched.length) return { updated: [], written: false };
+
+    const written = await this.writeDailyFile();
+    this.meta.lastDailySnapshot = touched.at(-1)?.date || null;
+    if (!this.readonly) await this._writeJson(this.metaFile, this.meta);
+    return { updated: touched, written };
+  }
+
+  /** Pairs whose daily snapshots are persisted (`DAILY_SNAPSHOT_PAIRS`). */
+  dailyPairs() {
+    const configured = config.dailyPairs;
+    if (!configured || !configured.length || configured.includes('*')) return this.pairs().map((p) => p.pair);
+    return configured.map((p) => p.toUpperCase());
+  }
+
+  /** Serialize + write `data/daily.jsonl`; no-op when nothing changed. */
+  async writeDailyFile() {
+    if (this.readonly) return false;
+    const cutoff = config.dailyRetentionDays > 0 ? new Date(Date.now() - config.dailyRetentionDays * 86_400_000).toISOString().slice(0, 10) : null;
+    const rows = [...this.daily.values()]
+      .filter((r) => !cutoff || r.date >= cutoff)
+      .sort((a, b) => (a.date === b.date ? String(a.pair).localeCompare(String(b.pair)) : a.date.localeCompare(b.date)));
+    const payload = rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '');
+    let current = null;
+    try {
+      current = await fsp.readFile(this.dailyFile, 'utf8');
+    } catch {
+      current = null;
+    }
+    if (current === payload) return false;
+    const tmp = `${this.dailyFile}.tmp`;
+    await fsp.writeFile(tmp, payload, 'utf8');
+    await fsp.rename(tmp, this.dailyFile);
+    return true;
   }
 
   /** CSV export of the raw log (optionally filtered by pair/time window). */
@@ -385,7 +561,7 @@ export class Store {
           (snapshot.quotes || []).find((q) => q.pair === config.primaryPair) || null,
       };
       if (!obs.quotes.length) return { seeded: false, reason: 'seed file has no quotes' };
-      await fsp.appendFile(this.logFile, `${JSON.stringify(obs)}\n`, 'utf8');
+      if (!this.readonly) await fsp.appendFile(this.logFile, `${JSON.stringify(obs)}\n`, 'utf8');
       this._index(obs);
       await this._writeJson(this.latestFile, obs);
       await this._writeJson(this.metaFile, this.meta);

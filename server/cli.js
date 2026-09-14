@@ -5,6 +5,7 @@
  *   node server/cli.js --json          # machine readable result
  *   node server/cli.js --seed-only     # bootstrap an empty store from the snapshot
  *   node server/cli.js --export csv    # dump the stored series as CSV
+ *   node server/cli.js --daily         # daily snapshot prices (JSON, or --format csv)
  *   node server/cli.js --loop          # keep polling (same cadence as the server)
  *
  * cron example (every 15 minutes, outside of the web server):
@@ -29,6 +30,12 @@ async function once() {
     const { stored, reason } = await store.append(result.observation, { force: true });
     result.stored = stored;
     result.storeReason = reason;
+    // Keep data/daily.jsonl current: this is what long-range graphs are built
+    // from, and the file a Vercel deployment ships with.
+    if (stored) {
+      const daily = await store.updateDailySnapshots();
+      result.daily = (daily.updated || []).map((d) => d.date);
+    }
   }
   await store.recordAttempt({ ok: result.ok, error: result.error, simulated: result.simulated });
   return result;
@@ -71,6 +78,25 @@ async function main() {
   }
 
   const format = valueOf('--format', has('--json') ? 'json' : 'text');
+
+  // Daily snapshot prices: one open/high/low/close row per calendar day.
+  if (has('--daily') || has('--daily-csv')) {
+    const pair = valueOf('--pair', config.primaryPair);
+    const days = Number(valueOf('--days', 0)) || 0;
+    const since = days > 0 ? Date.now() - days * 86_400_000 : 0;
+    if (has('--daily-csv') || format === 'csv') {
+      process.stdout.write(store.dailyCsv({ pair, since }));
+      return 0;
+    }
+    const rows = store.dailyRows({ pair, since });
+    if (format === 'jsonl') {
+      // The exact shape of data/daily.jsonl — pipe straight into the file.
+      process.stdout.write(rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
+      return 0;
+    }
+    process.stdout.write(`${JSON.stringify({ ok: rows.length > 0, pair, tz: store.dailyTzOffsetMin, count: rows.length, days: rows }, null, 2)}\n`);
+    return rows.length ? 0 : 1;
+  }
 
   if (has('--export') || has('--csv') || format === 'csv') {
     process.stdout.write(store.csv({ pair: valueOf('--pair', config.primaryPair) }));

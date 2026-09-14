@@ -12,6 +12,9 @@
     "dev": "node --watch server/index.js",
     "scrape": "node server/cli.js",
     "seed": "node server/cli.js --seed-only",
+    "daily": "node server/cli.js --daily",
+    "daily:csv": "node server/cli.js --daily --format csv",
+    "vercel:dev": "vercel dev --listen 3000",
     "simulate": "ALLOW_SIMULATION=true SIMULATE_ON_FAILURE=true SIMULATE_BACKFILL_DAYS=30 node server/index.js",
     "test:watch": "node --test --watch test/*.test.js",
     "test": "node --test test/*.test.js"

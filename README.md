@@ -22,6 +22,7 @@ USD/KHR   Bank Buy 4,049.00   Bank Sell 4,059.00   Mid 4,054.00   spread 10 (0.2
 - [How it works](#how-it-works)
 - [Dashboard](#dashboard)
 - [HTTP API](#http-api)
+- [Daily snapshots (graph data)](#daily-snapshots-graph-data)
 - [Configuration](#configuration)
 - [Data & storage](#data--storage)
 - [Deployment](#deployment)
@@ -45,10 +46,14 @@ USD/KHR   Bank Buy 4,049.00   Bank Sell 4,059.00   Mid 4,054.00   spread 10 (0.2
   interactive chart (24H→ALL, bid/ask/mid/spread, hover crosshair, min/max band for bucketed
   ranges), USD↔KHR converter that uses the correct bank side, threshold alerts, pair board,
   capture log and CSV export. Dark/light themes, responsive, keyboard shortcuts (`R`, `T`).
+- **Daily snapshots** — every calendar day (UTC+7) is collapsed into one open/high/low/close row
+  (`data/daily.jsonl`, `GET /api/daily`, *Daily* toggle on the chart): months of history in a few
+  hundred points instead of tens of thousands.
 - **JSON API + CSV** — consume the data from anything (spreadsheets, Grafana, a bot, your own app).
 - **Append-only JSONL dataset** — auditable, crash-safe, `tail -f`-able, trivially backed up.
-- **Serverless mode** — a GitHub Actions workflow can do the tracking for you and commit the
-  dataset back to this repo (no server required).
+- **Serverless mode** — deploy the dashboard + API to **Vercel** (`vercel.json`, one function for
+  all routes, a daily cron for the snapshot job), or let a GitHub Actions workflow do the tracking
+  and commit the dataset back to this repo. No server required for either.
 - **Tested** — parser, stats, store, HTTP API and a jsdom smoke test of the dashboard
   (54 tests, all offline).
 
@@ -106,6 +111,7 @@ npm test                               # full offline test suite (npm i -D jsdom
         │        ┌──────────────────────────────┐   data/observations.jsonl  (append-only)
         │        │  store: JSONL + in-memory     │   data/latest.json
         │        │  per-pair time index          │   data/meta.json
+        │        │  + daily OHLC snapshots       │   data/daily.jsonl
         │        └──────────────┬───────────────┘
         │                       │ series / latest / stats / csv
         │                       ▼
@@ -144,10 +150,10 @@ boards have different meanings.
 | Ticker | every pair from the last capture; click one to track it instead |
 | Hero | mid rate, 1H/24H/7D/30D change chips, bank “as of”, capture time, source + strategy |
 | Stat cards | Bank Buy (bid), Bank Sell (ask), spread (absolute + %), 24h range |
-| Chart | 24H/7D/30D/90D/1Y/ALL, bid/ask/mid/spread, hover crosshair + tooltip, min/max band when the range is bucketed, dashed amber line for simulated rows |
+| Chart | 24H/7D/30D/90D/1Y/ALL, bid/ask/mid/spread, **Auto/Daily resolution toggle** (daily snapshot closes), hover crosshair + tooltip, min/max band when the range is bucketed, dashed amber line for simulated rows, daily-CSV download |
 | Converter | USD→KHR uses the **bid** (you sell USD), KHR→USD uses the **ask** (you buy USD), plus mid-rate reference and spread cost |
 | Alerts | min/max thresholds stored in your browser; on-page banner, toast and optional desktop notification |
-| Scraper health | poll interval, next poll, attempts/successes, consecutive failures, strategy, log size |
+| Scraper health | poll interval, next poll, attempts/successes, consecutive failures, strategy, log size, daily snapshot coverage |
 | Pair board | bid/ask/mid/spread/sample count for all pairs, one-click tracking |
 | Capture log | newest captures with source, strategy and status (ok / seed / simulated) + CSV export |
 
@@ -160,7 +166,8 @@ All endpoints are CORS-enabled (`Access-Control-Allow-Origin: *`) and JSON unles
 | Endpoint | Description |
 | --- | --- |
 | `GET /api/latest?pair=USD/KHR&field=mid` | current quote, change windows, 24h summary, all pairs, status |
-| `GET /api/history?pair=USD/KHR&range=30d&field=mid&bucket=auto` | chart series + summary. `range`: `1h 24h 7d 30d 90d 1y all`; `field`: `mid bid ask spread`; `bucket`: `auto none <ms>` |
+| `GET /api/history?pair=USD/KHR&range=30d&field=mid&bucket=auto` | chart series + summary. `range`: `1h 24h 7d 30d 90d 1y all`; `field`: `mid bid ask spread`; `bucket`: `auto none <ms>`; `grain=daily` plots daily snapshot closes instead of bucketed samples |
+| `GET /api/daily?pair=USD/KHR&range=1y&field=mid&format=json` | **daily snapshot series** — one OHLC row per calendar day, plus chart-ready `points`. `format=csv` downloads it |
 | `GET /api/pairs` | every tracked pair with its latest quote and sample count |
 | `GET /api/observations?limit=25&offset=0` | recent raw captures (source, strategy, `simulated`, `seed`) |
 | `GET /api/export.csv?pair=USD/KHR&range=all` | CSV download of the stored series |
@@ -184,9 +191,55 @@ curl -s localhost:3000/api/latest | jq '.quote'
 # }
 
 curl -s 'localhost:3000/api/history?range=7d&field=mid' | jq '.summary'
+curl -s 'localhost:3000/api/daily?range=1y' | jq '.days[-1]'
+# {
+#   "pair": "USD/KHR", "date": "2026-09-14", "tz": "+07:00",
+#   "open": 4054, "high": 4054, "low": 4054, "close": 4054,
+#   "bid": { "open": 4050, "high": 4050, "low": 4050, "close": 4050, "count": 4 },
+#   "samples": 4, "sourceAsOf": "2026-09-14", "simulated": false
+# }
 curl -s -X POST localhost:3000/api/refresh | jq '{ok, primary}'
 curl -sOJ 'localhost:3000/api/export.csv?range=30d'
+curl -sOJ 'localhost:3000/api/daily?range=1y&format=csv'
 ```
+
+## Daily snapshots (graph data)
+
+Raw samples are perfect for a live ticker and terrible for a year-long chart. A **daily snapshot**
+is one row per calendar day per pair:
+
+```json
+{
+  "pair": "USD/KHR", "date": "2026-09-14", "tz": "+07:00",
+  "open": 4054, "high": 4054, "low": 4054, "close": 4054,
+  "mid":    { "open": 4054, "high": 4054, "low": 4054, "close": 4054, "count": 4 },
+  "bid":    { "open": 4050, "high": 4050, "low": 4050, "close": 4050, "count": 4 },
+  "ask":    { "open": 4058, "high": 4058, "low": 4058, "close": 4058, "count": 4 },
+  "spread": { "open": 8, "high": 8, "low": 8, "close": 8, "count": 4 },
+  "spreadClose": 8, "change": 0, "changePct": 0, "samples": 4,
+  "firstAt": "2026-09-13T17:22:55.643Z", "lastAt": "2026-09-14T04:47:13.837Z",
+  "sourceAsOf": "2026-09-14", "simulated": false
+}
+```
+
+- **Days are cut at Cambodian midnight** (UTC+7, `DAILY_TZ_OFFSET_MIN=420`; Cambodia has no DST),
+  so a row covers the same trading day the bank's board covers.
+- **OHLC for every board field** — mid, bid, ask and spread — so the same row serves whichever
+  series the chart is plotting, plus a `spreadClose` shortcut.
+- **Rows are both derived and persisted.** They are recomputed from the observation log on the fly
+  *and* merged with `data/daily.jsonl`, so history survives log pruning and a serverless host can
+  serve a full year from a few hundred rows.
+- **Three ways in:** `GET /api/daily` (JSON or `format=csv`), `GET /api/history?grain=daily` (the
+  chart's *Daily* toggle), and `node server/cli.js --daily [--format jsonl|csv] [--days 30]`.
+
+```bash
+node server/cli.js --daily --format jsonl > data/daily.jsonl   # exactly what the tracker writes
+node server/cli.js --daily --days 30 --format csv              # last 30 daily closes as CSV
+curl -s 'localhost:3000/api/daily?range=1y&field=bid' | jq '.points'
+```
+
+Simulated rows keep their flag (`"simulated": true` on the day they appear in), so a demo backfill
+can never masquerade as a year of real history.
 
 ## Configuration
 
@@ -207,6 +260,13 @@ Everything is environment-driven (see [`.env.example`](.env.example)). Defaults 
 | `MIN_STORE_INTERVAL_SEC` | `30` | unchanged readings closer together than this are skipped (unless forced) |
 | `MAX_OBSERVATIONS` / `RETENTION_DAYS` | `500000` / `0` | pruning bounds (`0` = keep forever) |
 | `USE_SEED` | `true` | seed an empty store from the committed snapshot |
+| `STORE_MODE` | `auto` | `auto` / `fs` / `readonly` — `auto` picks read-only on a serverless host |
+| `DAILY_TZ_OFFSET_MIN` | `420` | UTC offset for day boundaries (420 = UTC+7, Asia/Phnom_Penh) |
+| `DAILY_SNAPSHOT_PAIRS` | *(primary pair)* | pairs persisted to `daily.jsonl`; `*` = every tracked pair |
+| `DAILY_RETENTION_DAYS` | `0` | prune daily rows older than N days (`0` = keep forever) |
+| `CRON_SECRET` | *(empty)* | bearer token Vercel Cron sends to `/api/cron/*` |
+| `GITHUB_DATA_TOKEN` / `GITHUB_REPO` / `GITHUB_BRANCH` | *(empty)* | lets the serverless cron commit its snapshot back to this repo |
+| `DAILY_FILE` / `DAILY_CSV_FILE` | `data/daily.jsonl` / `data/usd-khr-daily.csv` | paths that job maintains in git |
 | `FETCH_TIMEOUT_MS` | `20000` | per-request timeout |
 | `USER_AGENT` / `ACCEPT_LANGUAGE` | browser-like | request headers |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (structured JSON logs) |
@@ -218,6 +278,9 @@ Everything is environment-driven (see [`.env.example`](.env.example)). Defaults 
 ```
 data/
 ├── observations.jsonl   # append-only: one JSON object per accepted capture
+├── daily.jsonl          # one OHLC snapshot per calendar day (graph data, committed)
+├── usd-khr-daily.csv    # the same rows as CSV (spreadsheet / BI friendly)
+├── usd-khr.csv          # raw series as CSV (committed by the Actions tracker)
 ├── latest.json          # most recent observation (fast cold start / debugging)
 └── meta.json            # scraper health: attempts, successes, failures, last error
 ```
@@ -243,8 +306,9 @@ One observation:
 ```
 
 `data/` is gitignored for local runs (it is regenerated by the scraper). The GitHub Actions
-workflow force-adds `data/observations.jsonl` and `data/usd-khr.csv`, because in *that* setup the
-dataset **is** the deliverable.
+workflow force-adds `data/observations.jsonl`, `data/usd-khr.csv`, `data/daily.jsonl` and
+`data/usd-khr-daily.csv`, because in *that* setup the dataset **is** the deliverable — and those
+committed files are also what a Vercel deployment serves (its filesystem is read-only).
 
 Handy one-liners:
 
@@ -255,6 +319,52 @@ node server/cli.js --export > usd-khr.csv                                     # 
 ```
 
 ## Deployment
+
+### Vercel (serverless)
+
+The repo ships a [`vercel.json`](vercel.json): `public/` is the static dashboard, every `/api/*`
+route is served by one Node function ([`api/index.js`](api/index.js)) and a daily cron runs the
+snapshot job ([`api/cron/daily-snapshot.js`](api/cron/daily-snapshot.js)). No build step, no
+runtime dependencies.
+
+```bash
+npm i -g vercel
+vercel                      # first deploy, links the project
+vercel env add CRON_SECRET  # random string; Vercel Cron authenticates with it
+vercel --prod
+```
+
+Or connect the GitHub repo in the Vercel dashboard (framework preset **Other**, build command
+empty, output directory `public`) — every push deploys.
+
+**How data works on a read-only filesystem.** Vercel functions cannot write to disk, so the store
+boots in read-only mode (`STORE_MODE=auto` detects this) and serves the dataset that ships with the
+bundle — the committed `data/observations.jsonl` + `data/daily.jsonl`, refreshed by
+[`.github/workflows/track.yml`](.github/workflows/track.yml). Two ways to keep it current:
+
+| Setup | What happens | Freshness |
+| --- | --- | --- |
+| **Actions tracker + deploy hook** (recommended) | the workflow scrapes hourly, commits the dataset, and pings a Vercel Deploy Hook to redeploy | ~1 h, zero extra services |
+| **Vercel cron + `GITHUB_DATA_TOKEN`** | the daily cron scrapes and commits `data/daily.jsonl` back to the repo over the GitHub Contents API; the commit triggers the redeploy | 1 row/day |
+
+Without either, the deployment still serves everything and `POST /api/refresh` still scrapes the
+live board — it just cannot remember the reading after the function instance is recycled.
+
+```bash
+# the cron route, by hand (Vercel calls it with this header on schedule)
+curl -H "Authorization: Bearer $CRON_SECRET" https://your-app.vercel.app/api/cron/daily-snapshot | jq '{ok, quote, daily, persisted}'
+```
+
+Notes:
+
+- **Hobby plans** allow 2 cron jobs, each at most once per day — the configured schedule
+  (`5 17 * * *` UTC) is 00:05 in Phnom Penh, i.e. just after the Cambodian day closes, so the
+  snapshot it writes is final. (A sub-daily schedule makes the *deploy itself* fail on Hobby.)
+- **Timeouts** are set to 15 s for the API and 30 s for the cron in `vercel.json`, inside Hobby's
+  ceiling; raise them on Pro if you add more work to the cron.
+- Cron runs are **GET** requests carrying `Authorization: Bearer $CRON_SECRET`; the route rejects
+  anything else with `401`.
+- `regions: ["sin1"]` puts the function in Singapore, the closest Vercel region to Cambodia.
 
 ### Docker
 
@@ -297,10 +407,15 @@ still works on demand.
 
 ### GitHub Actions (no server)
 
-[`.github/workflows/track.yml`](.github/workflows/track.yml) scrapes hourly (`cron: "5 * * * *"`)
-and commits `data/observations.jsonl` + `data/usd-khr.csv` back to the repo. Enable it by pushing
-to your default branch; run it on demand from the *Actions → Track USD/KHR* tab. Scheduled
-workflows only run on the default branch and can be delayed by GitHub.
+[`.github/workflows/track.yml`](.github/workflows/track.yml) scrapes hourly (`cron: "5 * * * *"`),
+rebuilds the daily snapshot file and commits `data/observations.jsonl`, `data/usd-khr.csv`,
+`data/daily.jsonl` + `data/usd-khr-daily.csv` back to the repo. Enable it by pushing to your
+default branch; run it on demand from the *Actions → Track USD/KHR* tab. Scheduled workflows only
+run on the default branch and can be delayed by GitHub.
+
+Add a `VERCEL_DEPLOY_HOOK_URL` secret (Vercel → Project → Settings → Git → Deploy Hooks) and the
+workflow also triggers a redeploy after each commit, so a Vercel deployment picks up new rows
+without any storage add-on.
 
 ### Behind a tunnel / no public IP
 
@@ -337,13 +452,21 @@ product, not to publish rates.
 ## Development & tests
 
 ```
+api/                    # Vercel serverless entrypoints (see vercel.json)
+├── index.js            # every /api/* route, served from the bundled dataset
+└── cron/
+    └── daily-snapshot.js  # daily cron: scrape → commit data/daily.jsonl
 server/
-├── index.js            # HTTP server, API routes, static files, boot sequence
+├── index.js            # HTTP server, static files, boot sequence, scheduler wiring
+├── router.js           # transport-agnostic /api/* routes (shared with api/*.js)
 ├── config.js           # env-driven config + structured logger
-├── store.js            # JSONL append-only store, in-memory per-pair index, CSV, pruning
+├── store.js            # JSONL append-only store, per-pair index, daily rows, CSV, pruning
+├── daily.js            # daily snapshots: day boundaries, OHLC, merging, CSV
+├── serverless.js       # read-only bootstrap, cron auth, scrape-and-persist for serverless
+├── gitstore.js         # GitHub Contents API client (commits the dataset back to git)
 ├── scheduler.js        # interval polling with jitter, backoff and manual trigger
 ├── stats.js            # range presets, bucketing (OHLC), summaries, change windows
-├── cli.js              # one-off scrape / CSV export / seed / --loop (cron friendly)
+├── cli.js              # one-off scrape / CSV export / --daily / seed / --loop (cron friendly)
 ├── seed-snapshot.json  # real bootstrap snapshot of the board
 └── scrape/
     ├── index.js        # orchestration: source plan → parse → validate → Observation
@@ -353,20 +476,22 @@ server/
 public/
 ├── index.html          # dashboard markup
 ├── styles.css          # design system (dark/light, responsive, print)
-├── app.js              # state, polling, rendering, converter, alerts
+├── app.js              # state, polling, rendering, converter, alerts, daily grain
 └── chart.js            # dependency-free canvas chart (DPR-aware, touch, crosshair)
 test/
 ├── fixtures/           # HTML/markdown/JSON snapshots of the board (incl. a div-only redesign)
 ├── parse.test.js       # parser layers, number & date normalization, sanity filters
 ├── stats.test.js       # bucketing, summaries, change windows
+├── daily.test.js       # day boundaries (UTC+7), OHLC, merging, chart points, CSV
 ├── store.test.js       # append/dedupe/persistence/ordering/CSV/meta
 ├── api.test.js         # boots the real server and exercises every endpoint
+├── vercel.test.js      # the serverless entrypoints: routes, cron auth, read-only store, git commit
 └── frontend.test.js    # jsdom smoke test: renders the dashboard, converter, alerts, banner
 ```
 
 ```bash
 npm install --save-dev jsdom   # only needed by test/frontend.test.js (it skips if absent)
-npm test                       # 54 tests, no network required
+npm test                       # 87 tests, no network required
 npm run test:watch
 ```
 
@@ -395,6 +520,8 @@ server-rendered and the primary parsing path works against the live site.
 | Rates stored but `USD/KHR` missing | board layout/tab change | inspect `data/observations.jsonl`; adjust `PRIMARY_PAIR` or the parser |
 | Chart is flat / one point | only one capture so far | wait for the next poll, lower `POLL_INTERVAL_MIN`, or press **Refresh** |
 | History missing after restart | `DATA_DIR` differs between runs | use the same `DATA_DIR` for the server, CLI and cron |
+| On Vercel the chart only shows a few days | the bundled `data/observations.jsonl` is short and no daily file ships | enable the Actions tracker (it commits `data/daily.jsonl`), or set `GITHUB_DATA_TOKEN` + `GITHUB_REPO` so the cron can commit snapshots |
+| `POST /api/refresh` works but the reading is forgotten | serverless filesystems are read-only by design | same as above — persistence needs git (or run the tracker on a host with a disk) |
 | `429` from `POST /api/refresh` | manual refresh rate limit | wait `REFRESH_MIN_GAP_SEC` |
 | Port already in use | another service on `:3000` | `PORT=8080 npm start` |
 
